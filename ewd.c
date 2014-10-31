@@ -83,7 +83,7 @@ static int rmchild(queue *q, int pid) {
 
 static int addchild(queue *q, int pid) {
 	proc *c;
-	c = malloc(sizeof(c));
+	c = malloc(sizeof(proc));
 	if(!c) {
 		fprintf(stderr, "cannot allocate memory: %s\n", strerror(errno));
 		return -1;
@@ -200,6 +200,7 @@ static int mkchild(queue *q) {
 			fprintf(stderr, "unable to fork: %s\n", strerror(errno));
 		}
 	}
+	free(a);
 	return p;
 }
 
@@ -215,14 +216,18 @@ static int parsereq(char *req) {
 	col = strsep(&req, "\n");
 	if(!col) {
 		fprintf(stderr, "error: missing `cmd` field\n");
+		free(name);
 		return -1;
 	}
 	args = strdup(col);
 	q = findqueue(name);
 	if(enqueue(q, args) != 0) {
 		fprintf(stderr, "unable to add job to queue: %s\n", args);
+		free(name);
+		free(args);
 		return -1;
 	}
+	free(name);
 	return 0;
 }
 
