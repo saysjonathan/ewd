@@ -38,7 +38,7 @@ static char *config = "/etc/ewd.conf";
 static int masterfd = -1;
 static char *port = "8277";
 static queue *queues = NULL;
-static int running = 1;
+volatile sig_atomic_t running = 1;
 
 static int queuesize(queue *q) {
 	job *j;
