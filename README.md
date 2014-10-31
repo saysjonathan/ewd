@@ -5,7 +5,6 @@ ewd is a simple worker queue for asynchronous background tasks.
 ewd is a job queue and worker management system. Queues are declared in a crontab-like file along with the maximum number of concurrent workers and the command the workers will run.
 
 	$ cat /etc/ewd.conf
-	#name max cmd
 	images 5 /usr/local/bin/process_images
 	stats 6 /usr/local/bin/generate_stats
 
