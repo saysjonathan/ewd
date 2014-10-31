@@ -17,8 +17,14 @@
 #define MAXBUFLEN 1024
 #define MAXJOBS USHRT_MAX
 
+typedef struct proc proc;
 typedef struct job job;
 typedef struct queue queue;
+
+struct proc {
+	int pid;
+	proc *next;
+};
 
 struct job {
 	char *args;
@@ -27,10 +33,10 @@ struct job {
 
 struct queue {
 	char *name;
-	int child;
 	int maxchild;
 	char *cmd;
 	queue *next;
+	proc *child;
 	job *head, *tail;
 };
 
@@ -40,15 +46,52 @@ static char *port = "8277";
 static queue *queues = NULL;
 volatile sig_atomic_t running = 1;
 
-static int queuesize(queue *q) {
-	job *j;
+static int childlen(queue *q) {
+	proc *c;
 	int size = 0;
-	j = q->head;
-	while(j) {
+	c = q->child;
+	while(c) {
 		size++;
-		j = j->next;
+		c = c->next;
 	}
 	return size;
+}
+
+static int rmchild(queue *q, int pid) {
+	proc *c, *pc;
+	if(!q->child) {
+		return -1;
+	}
+	if(q->child->pid == pid) {
+		q->child = q->child->next;
+		return 0;
+	}
+	for(c = q->child; c; pc = c, c = c->next) {
+		if(c->pid == pid) {
+			if(!c->next) {
+				pc->next = NULL;
+				return 0;
+			} else {
+				pc->next = c->next;
+				break;
+			}
+		}
+	}
+	free(c);
+	return 0;
+}
+
+static int addchild(queue *q, int pid) {
+	proc *c;
+	c = malloc(sizeof(c));
+	if(!c) {
+		fprintf(stderr, "cannot allocate memory: %s\n", strerror(errno));
+		return -1;
+	}
+	c->next = q->child;
+	q->child = c;
+	c->pid = pid;
+	return 0;
 }
 
 static queue *findqueue(char *name) {
@@ -62,11 +105,20 @@ static queue *findqueue(char *name) {
 	return q;
 }
 
-static char *dequeue(char *name) {
+static int queuelen(queue *q) {
+	job *j;
+	int size = 0;
+	j = q->head;
+	while(j) {
+		size++;
+		j = j->next;
+	}
+	return size;
+}
+
+static char *dequeue(queue *q) {
 	job *j;
 	char *s = NULL;
-	queue *q;
-	q = findqueue(name);
 	if(!q->head) {
 		return s;
 	}
@@ -81,10 +133,8 @@ static char *dequeue(char *name) {
 	return(s);
 }
 
-static int enqueue(char *name, char *jargs) {
+static int enqueue(queue *q, char *args) {
 	job *j;
-	queue *q;
-	q = findqueue(name);
 	j = malloc(sizeof(job));
 	if(!j) {
 		fprintf(stderr, "cannot allocate memory: %s\n", strerror(errno));
@@ -96,7 +146,7 @@ static int enqueue(char *name, char *jargs) {
 		q->tail->next = j;
 		q->tail = j;
 	}
-	j->args = jargs;
+	j->args = args;
 	j->next = NULL;
 	return 0;
 }
@@ -114,11 +164,11 @@ static void rmqueue(queue *q) {
 	}
 }
 
-static void mkqueue(char *qname, int qmax, char *qcmd) {
+static int mkqueue(char *name, int max, char *cmd) {
 	queue *q;
 	for(q = queues; q; q = q->next) {
-		if(!strcmp(qname, q->name)) {
-			printf("Queue %s already exists\n", qname);
+		if(!strcmp(name, q->name)) {
+			return 1;
 		}
 	}
 	q = malloc(sizeof(queue));
@@ -126,33 +176,35 @@ static void mkqueue(char *qname, int qmax, char *qcmd) {
 		fprintf(stderr, "cannot allocate memory: %s\n", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-	q->name = qname;
-	q->maxchild = qmax;
-	q->cmd = qcmd;
-	q->child = 0;
+	q->name = name;
+	q->maxchild = max;
+	q->cmd = cmd;
+	q->child = NULL;
 	q->next = queues;
 	q->head = q->tail = NULL;
 	queues = q;
+	return 0;
 }
 
-static int mkchild(char *name, char *cmd) {
-	int p;
+static int mkchild(queue *q) {
+	pid_t p = 0;
 	char *a;
-	a = dequeue(name);
+	a = dequeue(q);
 	if(a) {
-		char *args[] = {cmd, a, NULL};
+		char *args[] = {q->cmd, a, NULL};
 		p = fork();
 		if(p == 0) {
-			execv(cmd, args);
+			execv(q->cmd, args);
 			exit(EXIT_SUCCESS);
 		} else if(p == -1) {
 			fprintf(stderr, "unable to fork: %s\n", strerror(errno));
 		}
 	}
-	return 1;
+	return p;
 }
 
 static int parsereq(char *req) {
+	queue *q;
 	char *col, *name, *args;
 	col = strsep(&req, " \t");
 	if(!col) {
@@ -166,7 +218,8 @@ static int parsereq(char *req) {
 		return -1;
 	}
 	args = strdup(col);
-	if(enqueue(name, args) != 0) {
+	q = findqueue(name);
+	if(enqueue(q, args) != 0) {
 		fprintf(stderr, "unable to add job to queue: %s\n", args);
 		return -1;
 	}
@@ -220,21 +273,22 @@ static void master(int fd) {
 	int s;
 	fd_set master;
 	queue *q;
+	proc *c;
 	FD_SET(fd, &master);
 	while(running) {
 		for(q = queues; q; q = q->next) {
-			if(q->child > 0) {
-				while(waitpid(-1, &s, WNOHANG) > 0) {
-					q->child--;
+			if(q->child) {
+				for(c = q->child; c; c = c->next) {
+					if(waitpid(c->pid, &s, WNOHANG) > 0) {
+						rmchild(q, c->pid);
+					}
 				}
 			}
-			while((q->child < q->maxchild) && queuesize(q) > 0) {
-				q->child += mkchild(q->name, q->cmd);
-				continue;
+			while((childlen(q) < q->maxchild) && queuelen(q) > 0) {
+				addchild(q, mkchild(q));
 			}
 		}
 		if(!poll(master)) {
-			continue;
 		}
 	}
 	killpg(0, SIGHUP);
@@ -332,7 +386,7 @@ static void cleanup(void) {
 		while(j) {
 			j = j->next;
 		}
-		if(queuesize(q) == 0) {
+		if(queuelen(q) == 0) {
 			rmqueue(q);
 		} else {
 			printf("Unable to remove queue %s\n", q->name);
@@ -388,7 +442,9 @@ static int loadqueues(char *cf) {
 			break;
 		}
 		cmd = strdup(col);
-		mkqueue(name, max, cmd);
+		if(mkqueue(name, max, cmd) > 0) {
+			fprintf(stderr, "queue `%s` already exists", name);
+		}
 	}
 	free(line);
 	fclose(f);
@@ -410,6 +466,7 @@ int main(int argc, char *argv[]) {
 				break;
 			case 'p':
 				port = optarg;
+				break;
 			case 'h':
 			default:
 				usage();
