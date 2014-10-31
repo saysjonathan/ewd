@@ -51,9 +51,22 @@ static int queuesize(queue *q) {
 	return size;
 }
 
-static char *dequeue(queue *q) {
+static queue *findqueue(char *name) {
+	queue *q;
+	for(q = queues; q; q = q->next) {
+		if(strcmp(q->name, name) == 0) {
+			return q;
+		}
+	}
+	q = NULL;
+	return q;
+}
+
+static char *dequeue(char *name) {
 	job *j;
 	char *s = NULL;
+	queue *q;
+	q = findqueue(name);
 	if(!q->head) {
 		return s;
 	}
@@ -68,8 +81,10 @@ static char *dequeue(queue *q) {
 	return(s);
 }
 
-static int enqueue(queue *q, char *jargs) {
+static int enqueue(char *name, char *jargs) {
 	job *j;
+	queue *q;
+	q = findqueue(name);
 	j = malloc(sizeof(job));
 	if(!j) {
 		fprintf(stderr, "cannot allocate memory: %s\n", strerror(errno));
@@ -84,17 +99,6 @@ static int enqueue(queue *q, char *jargs) {
 	j->args = jargs;
 	j->next = NULL;
 	return 0;
-}
-
-static queue *findqueue(char *name) {
-	queue *q;
-	for(q = queues; q; q = q->next) {
-		if(strcmp(q->name, name) == 0) {
-			return q;
-		}
-	}
-	q = NULL;
-	return q;
 }
 
 static void rmqueue(queue *q) {
@@ -131,15 +135,15 @@ static void mkqueue(char *qname, int qmax, char *qcmd) {
 	queues = q;
 }
 
-static int mkchild(queue *q) {
+static int mkchild(char *name, char *cmd) {
 	int p;
 	char *a;
-	a = dequeue(q);
+	a = dequeue(name);
 	if(a) {
-		char *args[] = {q->cmd, a, NULL};
+		char *args[] = {cmd, a, NULL};
 		p = fork();
 		if(p == 0) {
-			execv(q->cmd, args);
+			execv(cmd, args);
 			exit(EXIT_SUCCESS);
 		} else if(p == -1) {
 			fprintf(stderr, "unable to fork: %s\n", strerror(errno));
@@ -149,7 +153,6 @@ static int mkchild(queue *q) {
 }
 
 static int parsereq(char *req) {
-	queue *q;
 	char *col, *name, *args;
 	col = strsep(&req, " \t");
 	if(!col) {
@@ -163,11 +166,7 @@ static int parsereq(char *req) {
 		return -1;
 	}
 	args = strdup(col);
-	if(!(q = findqueue(name)) != 0) {
-		fprintf(stderr, "unable to find queue: %s\n", name);
-		return -1;
-	}
-	if(enqueue(q, args) != 0) {
+	if(enqueue(name, args) != 0) {
 		fprintf(stderr, "unable to add job to queue: %s\n", args);
 		return -1;
 	}
@@ -217,9 +216,10 @@ static int poll(fd_set fd) {
 	return 0;
 }
 
-static void master(queue *q, int fd) {
+static void master(int fd) {
 	int s;
 	fd_set master;
+	queue *q;
 	FD_SET(fd, &master);
 	while(running) {
 		for(q = queues; q; q = q->next) {
@@ -229,7 +229,7 @@ static void master(queue *q, int fd) {
 				}
 			}
 			while((q->child < q->maxchild) && queuesize(q) > 0) {
-				q->child += mkchild(q);
+				q->child += mkchild(q->name, q->cmd);
 				continue;
 			}
 		}
@@ -324,8 +324,9 @@ static int setuphandlers(void) {
 	return 0;
 }
 
-static void cleanup(queue *q) {
+static void cleanup(void) {
 	job *j;
+	queue *q;
 	for(q = queues; q; q = q->next) {
 		j = q->head;
 		while(j) {
@@ -425,9 +426,9 @@ int main(int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 	masterfd = tcpopen(port);
-	master(queues, masterfd);
+	master(masterfd);
 	close(masterfd);
-	cleanup(queues);
+	cleanup();
 	fprintf(stderr, "exiting\n");
 	exit(EXIT_SUCCESS);
 }
