@@ -260,8 +260,8 @@ static int handle(int fd) {
 static int poll(fd_set fd) {
 	int ret;
 	struct timeval tv;
-	tv.tv_sec = 2;
-	tv.tv_usec = 500000;
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
 	ret = select(masterfd+1, &fd, NULL, NULL, &tv);
 	if(ret == -1) {
 		fprintf(stderr, "unable to select: %s\n", strerror(errno));
@@ -299,6 +299,15 @@ static void master(int fd) {
 	killpg(0, SIGHUP);
 }
 
+static void cleanuptcp(int fd, struct addrinfo *ai) {
+	if (fd >= 0) {
+		close(fd);
+	}
+	if (ai) {
+		freeaddrinfo(ai);
+	}
+}
+
 static int tcpopen(const char *port) {
         struct addrinfo hints, *ai = NULL;
 	int status;
@@ -311,42 +320,22 @@ static int tcpopen(const char *port) {
 
         if ((status = getaddrinfo(NULL, port, &hints, &ai)) < 0) {
                 fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-		if (fd >= 0) {
-			close(fd);
-		}
-		if (ai) {
-			freeaddrinfo(ai);
-		}
+		cleanuptcp(fd, ai);
                 exit(EXIT_FAILURE);
         }
         if ((fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) < 0) {
                 fprintf(stderr, "socket error: %s\n", gai_strerror(fd));
-		if (fd >= 0) {
-			close(fd);
-		}
-		if (ai) {
-			freeaddrinfo(ai);
-		}
+		cleanuptcp(fd, ai);
                 exit(EXIT_FAILURE);
         }
         if ((status = bind(fd, ai->ai_addr, ai->ai_addrlen)) < 0) {
                 fprintf(stderr, "bind error: %s\n", gai_strerror(fd));
-		if (fd >= 0) {
-			close(fd);
-		}
-		if (ai) {
-			freeaddrinfo(ai);
-		}
+		cleanuptcp(fd, ai);
                 exit(EXIT_FAILURE);
         }
         if ((status = listen(fd, SOMAXCONN)) < 0) {
                 fprintf(stderr, "listen error: %s\n", gai_strerror(fd));
-		if (fd >= 0) {
-			close(fd);
-		}
-		if (ai) {
-			freeaddrinfo(ai);
-		}
+		cleanuptcp(fd, ai);
                 exit(EXIT_FAILURE);
         }
 
@@ -358,8 +347,8 @@ static void sighandler(int sig) {
 	switch(sig) {
 		case SIGINT:
 		case SIGTERM:
-			close(masterfd);
 			running = 0;
+			close(masterfd);
 			break;
 		default:
 			break;
