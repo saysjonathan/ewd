@@ -28,3 +28,5 @@ To install:
 
 ## License
 MIT/X Consortium License
+
+© 2014 Jonathan Boyett <jonathan@failingservers.com>
