@@ -191,10 +191,19 @@ static int mkchild(queue *q) {
 	char *a;
 	a = dequeue(q);
 	if(a) {
-		char *args[] = {q->cmd, a, NULL};
+		int i = 0;
+		char *pt = strtok(a, " ");
+		char *pargs[25];
+		pargs[i++] = q->cmd;
+		while (pt != NULL) {
+			pargs[i++] = pt;
+			pt = strtok(NULL, " ");
+		}
+		pargs[i] = NULL;
+
 		p = fork();
 		if(p == 0) {
-			execv(q->cmd, args);
+			execv(q->cmd, pargs);
 			exit(EXIT_SUCCESS);
 		} else if(p == -1) {
 			fprintf(stderr, "unable to fork: %s\n", strerror(errno));
